@@ -46,9 +46,9 @@ class DirectDriver(Driver):
         pool = ConnectionPool(lambda a: connect(a, security_plan.ssl_context, **config))
         Driver.__init__(self, pool)
 
-    def session(self, access_mode=None):
+    async def session(self, access_mode=None):
         try:
-            return BoltSession(self.pool.acquire(self.address))
+            return BoltSession(await self.pool.acquire(self.address))
         except ServiceUnavailable as error:
             if error.code == "Neo.ClientError.Security.Unauthorized":
                 raise Unauthorized(error.args[0])
@@ -107,6 +107,12 @@ class BoltSession(Session):
 
     def __del__(self):
         self.close()
+    
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
 
     def __enter__(self):
         return self
@@ -114,18 +120,18 @@ class BoltSession(Session):
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def close(self):
-        super(BoltSession, self).close()
+    async def close(self):
+        await super(BoltSession, self).close()
         if self.connection:
             if not self.connection.closed:
-                self.sync()
+                await self.sync()
             self.connection.in_use = False
             self.connection = None
 
     def closed(self):
         return self.connection is None or self.connection.closed
 
-    def run(self, statement, parameters=None, **kwparameters):
+    async def run(self, statement, parameters=None, **kwparameters):
         if not self.connection:
             raise SessionError("This session is closed.")
 
@@ -142,13 +148,13 @@ class BoltSession(Session):
 
         self.connection.append(RUN, (statement, parameters), response=run_response)
         self.connection.append(PULL_ALL, response=pull_all_response)
-        self.connection.send()
+        await self.connection.send()
 
         return result
 
-    def fetch(self):
+    async def fetch(self):
         try:
-            return self.connection.fetch()
+            return await self.connection.fetch()
         except ServiceUnavailable as cause:
             self.connection.in_use = False
             self.connection = None
@@ -160,29 +166,29 @@ class BoltSession(Session):
             else:
                 raise
 
-    def sync(self):
-        self.connection.sync()
+    async def sync(self):
+        await self.connection.sync()
 
-    def begin_transaction(self, bookmark=None):
+    async def begin_transaction(self, bookmark=None):
         transaction = super(BoltSession, self).begin_transaction(bookmark)
         parameters = {}
         if bookmark is not None:
             parameters["bookmark"] = bookmark
-        self.run("BEGIN", parameters)
+        await self.run("BEGIN", parameters)
         return transaction
 
-    def commit_transaction(self):
+    async def commit_transaction(self):
         super(BoltSession, self).commit_transaction()
-        result = self.run("COMMIT")
-        self.sync()
+        result = await self.run("COMMIT")
+        await self.sync()
         summary = result.summary()
         self.last_bookmark = summary.metadata.get("bookmark")
         return self.last_bookmark
 
-    def rollback_transaction(self):
+    async def rollback_transaction(self):
         super(BoltSession, self).rollback_transaction()
-        self.run("ROLLBACK")
-        self.sync()
+        await self.run("ROLLBACK")
+        await self.sync()
 
 
 class BoltStatementResult(StatementResult):

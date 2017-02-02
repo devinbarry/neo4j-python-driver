@@ -272,6 +272,14 @@ class Transaction(object):
         self.session = session
         self.on_close = on_close
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self.success is None:
+            self.success = not bool(exc_type)
+        await self.close()
+
     def __enter__(self):
         return self
 
@@ -280,7 +288,7 @@ class Transaction(object):
             self.success = not bool(exc_type)
         self.close()
 
-    def run(self, statement, parameters=None, **kwparameters):
+    async def run(self, statement, parameters=None, **kwparameters):
         """ Run a Cypher statement within the context of this transaction.
         Note that the statement is only passed to the server lazily,
         when the result is consumed. To force the statement to be sent to
@@ -309,9 +317,9 @@ class Transaction(object):
         """
         if self.closed():
             raise TransactionError("Cannot use closed transaction")
-        return self.session.run(statement, parameters, **kwparameters)
+        return await self.session.run(statement, parameters, **kwparameters)
 
-    def sync(self):
+    async def sync(self):
         """ Send and receive all outstanding messages for this
         transaction.
 
@@ -319,9 +327,9 @@ class Transaction(object):
         """
         if self.closed():
             raise TransactionError("Cannot use closed transaction")
-        self.session.sync()
+        await self.session.sync()
 
-    def commit(self):
+    async def commit(self):
         """ Mark this transaction as successful and close in order to
         trigger a COMMIT.
 
@@ -330,9 +338,9 @@ class Transaction(object):
         if self.closed():
             raise TransactionError("Cannot use closed transaction")
         self.success = True
-        self.close()
+        await self.close()
 
-    def rollback(self):
+    async def rollback(self):
         """ Mark this transaction as unsuccessful and close in order to
         trigger a ROLLBACK.
 
@@ -341,16 +349,16 @@ class Transaction(object):
         if self.closed():
             raise TransactionError("Cannot use closed transaction")
         self.success = False
-        self.close()
+        await self.close()
 
-    def close(self):
+    async def close(self):
         """ Close this transaction, triggering either a COMMIT or a ROLLBACK.
         """
         if not self.closed():
             if self.success:
-                self.session.commit_transaction()
+                await self.session.commit_transaction()
             else:
-                self.session.rollback_transaction()
+                await self.session.rollback_transaction()
             self._closed = True
             self.on_close()
 

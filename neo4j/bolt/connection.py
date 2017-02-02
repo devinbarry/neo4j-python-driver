@@ -28,6 +28,7 @@ the `session` module provides the main user-facing abstractions.
 from __future__ import division
 
 import logging
+import asyncio
 from base64 import b64encode
 from collections import deque, namedtuple
 from io import BytesIO
@@ -108,9 +109,11 @@ class BufferingSocket(object):
         self.address = Address(*get_host_port(self.socket))
         self.buffer = bytearray()
 
-    def fill(self):
+    async def fill(self):
         ready_to_read, _, _ = select((self.socket,), (), (), 0)
-        received = self.socket.recv(65539)
+        loop = asyncio.get_event_loop()
+        received = await loop.sock_recv.sock_recv(self.socket, 65539)
+        # received = self.socket.recv(65539)
         if received:
             log_debug("S: b%r", received)
             self.buffer[len(self.buffer):] = received
@@ -122,18 +125,18 @@ class BufferingSocket(object):
                     self.connection.pool.remove(self.address)
                 raise ServiceUnavailable("Failed to read from connection %r" % (self.address,))
 
-    def read_message(self):
+    async def read_message(self):
         message_data = bytearray()
         p = 0
         size = -1
         while size != 0:
             while len(self.buffer) - p < 2:
-                self.fill()
+                await self.fill()
             size = 0x100 * self.buffer[p] + self.buffer[p + 1]
             p += 2
             if size > 0:
                 while len(self.buffer) - p < size:
-                    self.fill()
+                    await self.fill()
                 end = p + size
                 message_data[len(message_data):] = self.buffer[p:end]
                 p = end
@@ -193,12 +196,13 @@ class ChunkChannel(object):
             del output_buffer[:]
             self.output_size = 0
 
-    def send(self):
+    async def send(self):
         """ Send all queued messages to the server.
         """
         data = self.raw.getvalue()
         log_debug("C: b%r", data)
-        self.socket.sendall(data)
+        loop = asyncio.get_event_loop()
+        await loop.sock_sendall(self.socket, data)
 
         self.raw.seek(self.raw.truncate(0))
 
@@ -290,9 +294,10 @@ class Connection(object):
         # Pick up the server certificate, if any
         self.der_encoded_server_certificate = config.get("der_encoded_server_certificate")
 
+    async def initialize(self):
         response = InitResponse(self)
         self.append(INIT, (self.user_agent, self.auth_dict), response=response)
-        self.sync()
+        await self.sync()
 
     def __del__(self):
         self.close()
@@ -312,7 +317,7 @@ class Connection(object):
         self.channel.flush(end_of_message=True)
         self.responses.append(response)
 
-    def acknowledge_failure(self):
+    async def acknowledge_failure(self):
         """ Add an ACK_FAILURE message to the outgoing queue, send
         it and consume all remaining messages.
         """
@@ -324,12 +329,12 @@ class Connection(object):
         response.on_failure = on_failure
 
         self.append(ACK_FAILURE, response=response)
-        self.send()
+        await self.send()
         fetch = self.fetch
         while not response.complete:
-            fetch()
+            await fetch()
 
-    def reset(self):
+    async def reset(self):
         """ Add a RESET message to the outgoing queue, send
         it and consume all remaining messages.
         """
@@ -341,21 +346,21 @@ class Connection(object):
         response.on_failure = on_failure
 
         self.append(RESET, response=response)
-        self.send()
+        await self.send()
         fetch = self.fetch
         while not response.complete:
-            fetch()
+            await fetch()
 
-    def send(self):
+    async def send(self):
         """ Send all queued messages to the server.
         """
         if self.closed:
             raise ServiceUnavailable("Failed to write to closed connection %r" % (self.server.address,))
         if self.defunct:
             raise ServiceUnavailable("Failed to write to defunct connection %r" % (self.server.address,))
-        self.channel.send()
+        await self.channel.send()
 
-    def fetch(self):
+    async def fetch(self):
         """ Receive exactly one message from the server
         (if one is available).
 
@@ -369,7 +374,7 @@ class Connection(object):
             return 0
 
         try:
-            message_data = self.buffering_socket.read_message()
+            message_data = await self.buffering_socket.read_message()
         except ProtocolError:
             self.defunct = True
             self.close()
@@ -409,15 +414,15 @@ class Connection(object):
 
         return 1
 
-    def sync(self):
+    async def sync(self):
         """ Send and fetch all outstanding messages.
         """
-        self.send()
+        await self.send()
         count = 0
         while self.responses:
             response = self.responses[0]
             while not response.complete:
-                count += self.fetch()
+                count += await self.fetch()
         return count
 
     def close(self):
@@ -446,7 +451,7 @@ class ConnectionPool(object):
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def acquire(self, address):
+    async def acquire(self, address):
         """ Acquire a connection to a given address from the pool.
         This method is thread safe.
         """
@@ -466,6 +471,7 @@ class ConnectionPool(object):
                     connection.in_use = True
                     return connection
             connection = self.connector(address)
+            await connection.initialize()
             connection.pool = self
             connection.in_use = True
             connections.append(connection)
