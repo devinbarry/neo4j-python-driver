@@ -87,6 +87,7 @@ class RoutingDriver(Driver):
             Driver.__init__(self, pool)
 
     def session(self, access_mode=None):
+        import pdb; pdb.set_trace()
         if access_mode == READ_ACCESS:
             connection = self.pool.acquire_for_read()
         elif access_mode == WRITE_ACCESS:
@@ -105,20 +106,11 @@ class BoltSession(Session):
         self.connection = connection
         self.access_mode = access_mode
 
-    def __del__(self):
-        self.close()
-    
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
         await self.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
 
     async def close(self):
         await super(BoltSession, self).close()
@@ -170,7 +162,7 @@ class BoltSession(Session):
         await self.connection.sync()
 
     async def begin_transaction(self, bookmark=None):
-        transaction = super(BoltSession, self).begin_transaction(bookmark)
+        transaction = await super(BoltSession, self).begin_transaction(bookmark)
         parameters = {}
         if bookmark is not None:
             parameters["bookmark"] = bookmark
@@ -178,15 +170,15 @@ class BoltSession(Session):
         return transaction
 
     async def commit_transaction(self):
-        super(BoltSession, self).commit_transaction()
+        await super(BoltSession, self).commit_transaction()
         result = await self.run("COMMIT")
         await self.sync()
-        summary = result.summary()
-        self.last_bookmark = summary.metadata.get("bookmark")
+        summary = await result.summary()
+        self.last_bookmark =  summary.metadata.get("bookmark")
         return self.last_bookmark
 
     async def rollback_transaction(self):
-        super(BoltSession, self).rollback_transaction()
+        await super(BoltSession, self).rollback_transaction()
         await self.run("ROLLBACK")
         await self.sync()
 
@@ -221,9 +213,9 @@ class BoltStatementResult(StatementResult):
             self._summary = ResultSummary(self.statement, self.parameters, **all_metadata)
             self._session = None
 
-        def on_failure(metadata):
+        async def on_failure(metadata):
             # Called on execution failure.
-            self._session.connection.acknowledge_failure()
+            await self._session.connection.acknowledge_failure()
             self._session = None
             raise self.error_class(metadata)
 

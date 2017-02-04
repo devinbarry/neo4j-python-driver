@@ -115,7 +115,7 @@ class Driver(object):
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def session(self, access_mode=None):
+    async def session(self, access_mode=None):
         """ Create a new session using a connection from the driver connection
         pool. Session creation is a lightweight operation and sessions are
         not thread safe, therefore a session should generally be short-lived
@@ -124,6 +124,7 @@ class Driver(object):
         :param access_mode:
         :returns: new :class:`.Session` object
         """
+        import pdb; pdb.set_trace()
         pass
 
     def close(self):
@@ -159,22 +160,19 @@ class Session(object):
     #: The bookmark received from completion of the last :class:`.Transaction`.
     last_bookmark = None
 
-    def __del__(self):
-        self.close()
-
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
 
-    def close(self):
+    async def close(self):
         """ Close the session. This will release any borrowed resources,
         such as connections, and will roll back any outstanding transactions.
         """
         if self.transaction:
             try:
-                self.rollback_transaction()
+                await self.rollback_transaction()
             except (CypherError, TransactionError, SessionError, ServiceUnavailable):
                 pass
 
@@ -184,7 +182,7 @@ class Session(object):
         :returns: :const:`True` if closed, :const:`False` otherwise.
         """
 
-    def run(self, statement, parameters=None, **kwparameters):
+    async def run(self, statement, parameters=None, **kwparameters):
         """ Run a Cypher statement within an auto-commit transaction.
         Note that the statement is only passed to the server lazily,
         when the result is consumed. To force the statement to be sent to
@@ -198,21 +196,21 @@ class Session(object):
         :returns: :class:`.StatementResult` object
         """
 
-    def fetch(self):
+    async def fetch(self):
         """ Fetch the next message if available.
 
         :returns: The number of messages fetched (zero or one)
         """
         return 0
 
-    def sync(self):
+    async def sync(self):
         """ Carry out a full send and receive.
 
         :returns: Total number of records received
         """
         return 0
 
-    def begin_transaction(self, bookmark=None):
+    async def begin_transaction(self, bookmark=None):
         """ Create a new :class:`.Transaction` within this session.
 
         :param bookmark: a bookmark to which the server should
@@ -229,7 +227,7 @@ class Session(object):
         self.transaction = Transaction(self, on_close=clear_transaction)
         return self.transaction
 
-    def commit_transaction(self):
+    async def commit_transaction(self):
         """ Commit the current transaction.
 
         :returns: the bookmark returned from the server, if any
@@ -239,7 +237,7 @@ class Session(object):
             raise TransactionError("No transaction to commit")
         self.transaction = None
 
-    def rollback_transaction(self):
+    async def rollback_transaction(self):
         """ Rollback the current transaction.
 
         :raise: :class:`.TransactionError` if no transaction is currently open
@@ -279,14 +277,6 @@ class Transaction(object):
         if self.success is None:
             self.success = not bool(exc_type)
         await self.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if self.success is None:
-            self.success = not bool(exc_type)
-        self.close()
 
     async def run(self, statement, parameters=None, **kwparameters):
         """ Run a Cypher statement within the context of this transaction.
@@ -397,8 +387,8 @@ class StatementResult(object):
         self._session = session
         self._records = deque()
 
-    def __iter__(self):
-        return self.records()
+    async def __aiter__(self):
+        return await self.records()
 
     def online(self):
         """ Indicator for whether or not this result is still attached to
@@ -408,57 +398,57 @@ class StatementResult(object):
         """
         return self._session and not self._session.closed()
 
-    def fetch(self):
+    async def fetch(self):
         """ Fetch another record, if available.
 
         :returns: number of records fetched (zero or one)
         """
         if self.online():
-            return self._session.fetch()
+            return await self._session.fetch()
         else:
             return 0
 
-    def buffer(self):
+    async def buffer(self):
         """ Fetch the remainder of this result from the network and buffer
         it. On return from this method, the result will no longer be
         :meth:`.online`.
         """
         while self.online():
-            self.fetch()
+            await self.fetch()
 
-    def keys(self):
+    async def keys(self):
         """ The keys for the records in this result.
 
         :returns: tuple of key names
         """
         while self._keys is None and self.online():
-            self.fetch()
+            await self.fetch()
         return self._keys
 
-    def records(self):
+    async def records(self):
         """ Generator for records obtained from this result.
 
         :yields: iterable of :class:`.Record` objects
         """
         hydrate = self.value_system.hydrate
         zipper = self.zipper
-        keys = self.keys()
+        keys = await self.keys()
         records = self._records
         while records:
             values = records.popleft()
             yield zipper(keys, hydrate(values))
         while self.online():
-            self.fetch()
+            await self.fetch()
             while records:
                 values = records.popleft()
                 yield zipper(keys, hydrate(values))
 
-    def summary(self):
+    async def summary(self):
         """ Obtain the summary of this result, buffering any remaining records.
 
         :returns: The :class:`.ResultSummary` for this result
         """
-        self.buffer()
+        await self.buffer()
         return self._summary
 
     def consume(self):
@@ -490,7 +480,7 @@ class StatementResult(object):
             warn("Expected a result with a single record, but this result contains %d" % size)
         return records[0]
 
-    def peek(self):
+    async def peek(self):
         """ Obtain the next record from this result without consuming it.
         This leaves the record in the buffer for further processing.
 
@@ -498,13 +488,13 @@ class StatementResult(object):
         """
         hydrate = self.value_system.hydrate
         zipper = self.zipper
-        keys = self.keys()
+        keys = await self.keys()
         records = self._records
         if records:
             values = records[0]
             return zipper(keys, hydrate(values))
         while not records and self.online():
-            self.fetch()
+            await self.fetch()
             if records:
                 values = records[0]
                 return zipper(keys, hydrate(values))

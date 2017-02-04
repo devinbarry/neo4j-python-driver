@@ -112,7 +112,7 @@ class BufferingSocket(object):
     async def fill(self):
         ready_to_read, _, _ = select((self.socket,), (), (), 0)
         loop = asyncio.get_event_loop()
-        received = await loop.sock_recv.sock_recv(self.socket, 65539)
+        received = await loop.sock_recv(self.socket, 65539)
         # received = self.socket.recv(65539)
         if received:
             log_debug("S: b%r", received)
@@ -450,6 +450,13 @@ class ConnectionPool(object):
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.close()
+
 
     async def acquire(self, address):
         """ Acquire a connection to a given address from the pool.
