@@ -87,7 +87,6 @@ class RoutingDriver(Driver):
             Driver.__init__(self, pool)
 
     def session(self, access_mode=None):
-        import pdb; pdb.set_trace()
         if access_mode == READ_ACCESS:
             connection = self.pool.acquire_for_read()
         elif access_mode == WRITE_ACCESS:

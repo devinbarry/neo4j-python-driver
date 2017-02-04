@@ -124,7 +124,6 @@ class Driver(object):
         :param access_mode:
         :returns: new :class:`.Session` object
         """
-        import pdb; pdb.set_trace()
         pass
 
     def close(self):
