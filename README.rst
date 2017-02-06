@@ -17,9 +17,9 @@ Quick Example
     driver = GraphDatabase.driver(uri, auth=auth_token)
 
     def print_friends_of(name):
-        with driver.session() as session:
-            with session.begin_transaction() as tx:
-                for record in tx.run("MATCH (a:Person)-[:KNOWS]->(f) "
+        async with await driver.session() as session:
+            async with await session.begin_transaction() as tx:
+                for record in await tx.run("MATCH (a:Person)-[:KNOWS]->(f) "
                                      "WHERE a.name = {name} "
                                      "RETURN f.name", name=name):
                     print(record["f.name"])
