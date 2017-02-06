@@ -408,7 +408,7 @@ class Connection(object):
             log_info("S: FAILURE (%r)", metadata)
             response = self.responses.popleft()
             response.complete = True
-            response.on_failure(metadata or {})
+            await response.on_failure(metadata or {})
         else:
             raise ProtocolError("Unexpected response message with signature %02X" % signature)
 
